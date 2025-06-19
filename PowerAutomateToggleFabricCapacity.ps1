@@ -1,67 +1,31 @@
+# on the automation account this is done through the portal/cli
+# Install-Module -Name Az.Fabric -RequiredVersion 0.1.2 -Force
+# Import-Module Az.Fabric 
+
 # Connect using Managed Identity
 Connect-AzAccount -Identity
 
-# Variables
+# Parameters
 $resourceGroup = "<resource_group>"
 $capacityName  = "<capacity_name>"
-$resourceType  = "Microsoft.Fabric/capacities"
-$apiVersion    = "2023-11-01"
+$subId         = (Get-AzContext).Subscription.Id
 
-$capacity = Get-AzResource -ResourceGroupName $resourceGroup `
-                           -ResourceType $resourceType `
-                           -ResourceName $capacityName `
-                           -ApiVersion $apiVersion `
-                           -ErrorAction SilentlyContinue
+# Check current status
+$cap = Get-AzFabricCapacity -ResourceGroupName $resourceGroup -CapacityName $capacityName -SubscriptionId $subId
+$status = $cap.Status  # e.g., 'Succeeded' or 'Paused'
+Write-Output "Current Fabric capacity status: $status"
 
-if (-not $capacity) {
-    Write-Output "❌ ERROR: Could not find the Fabric capacity resource."
-    return
+# 4. Suspend or resume based on state
+if ($status -eq 'Succeeded') {
+    Write-Output "⏸ Suspending capacity..."
+    Suspend-AzFabricCapacity -ResourceGroupName $resourceGroup -CapacityName $capacityName -SubscriptionId $subId -NoWait
+    Write-Output "📨 Suspend operation started."
 }
-
-# Output the full JSON for inspection
-# Write-Output "🔍 Dumping full Fabric capacity resource JSON:"
-# $capacity | ConvertTo-Json -Depth 10 | Out-String | Write-Output
-
-$state = $capacity.Properties?.status
-
-if (-not $state) {
-    Write-Output "❌ ERROR: status not found on the resource."
-    return
+elseif ($status -eq 'Paused') {
+    Write-Output "▶ Resuming capacity..."
+    Resume-AzFabricCapacity -ResourceGroupName $resourceGroup -CapacityName $capacityName -SubscriptionId $subId -NoWait
+    Write-Output "📨 Resume operation started."
 }
-
-Write-Output "✅ Current capacity status: $state"
-
-# --- Helper: Invoke REST method to resume or suspend ---
-function Invoke-CapacityAction {
-    param (
-        [string]$action  # "resume" or "suspend"
-    )
-
-    $token = (Get-AzAccessToken).Token
-    $resourceId = $capacity.ResourceId.TrimEnd('/')
-    $uri = "https://management.azure.com$resourceId/$action" + "?api-version=$apiVersion"
-
-    Write-Output "🔧 Invoking '$action' on capacity..."
-    Write-Output "📎 URI: $uri"
-
-    try {
-        Invoke-RestMethod -Method POST -Uri $uri -Headers @{ Authorization = "Bearer $token" } -ErrorAction Stop
-        Write-Output "✅ Action '$action' submitted successfully."
-    } catch {
-        Write-Output "❌ Failed to invoke action '$action': $_"
-    }
-}
-
-switch ($state.ToLower()) {
-    "paused" {
-        Write-Output "▶ Capacity is paused. Resuming..."
-        Invoke-CapacityAction -action "resume"
-    }
-    "succeeded" {
-        Write-Output "⏸ Capacity is running. Pausing..."
-        Invoke-CapacityAction -action "suspend"
-    }
-    default {
-        Write-Output "⚠ Capacity is in an unknown state: $state. No action taken."
-    }
+else {
+    Write-Output "⚠ Unknown status '$status'. No action taken."
 }
